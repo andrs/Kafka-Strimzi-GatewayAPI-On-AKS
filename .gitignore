@@ -6,7 +6,7 @@
 #
 # Environment files with secrets
 #.env
-*.env
+#*.env
 #.env.local
 #.env.*.local
 
