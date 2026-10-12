@@ -197,4 +197,4 @@ scratch/
 # ============================================================================
 
 # Original Strimzi Gateway API examples (reference only, not part of deployment)
-strimzi-gateway-api/
+#strimzi-gateway-api/
