@@ -5,10 +5,10 @@
 # Kubernetes credentials directory (contains CA cert, passwords, JAAS config)
 #
 # Environment files with secrets
-.env
+#.env
 *.env
-.env.local
-.env.*.local
+#.env.local
+#.env.*.local
 
 # Kubernetes config files (may contain tokens/certs)
 kubeconfig
@@ -24,7 +24,7 @@ kubeconfig
 *.jks
 
 # Properties files that may contain credentials
-*client.properties
+#*client.properties
 *producer.properties
 *consumer.properties
 kafka-*.properties
