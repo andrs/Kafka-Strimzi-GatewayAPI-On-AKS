@@ -3,9 +3,7 @@
 # ============================================================================
 
 # Kubernetes credentials directory (contains CA cert, passwords, JAAS config)
-creds/
-**/creds/
-
+#
 # Environment files with secrets
 .env
 *.env
@@ -18,7 +16,7 @@ kubeconfig
 .kube/
 
 # Certificate files
-*.crt
+#*.crt
 *.key
 *.pem
 *.p12
@@ -193,3 +191,10 @@ azurek8s
 notes.txt
 TODO.txt
 scratch/
+
+# ============================================================================
+# Reference Examples & External Directories
+# ============================================================================
+
+# Original Strimzi Gateway API examples (reference only, not part of deployment)
+strimzi-gateway-api/
