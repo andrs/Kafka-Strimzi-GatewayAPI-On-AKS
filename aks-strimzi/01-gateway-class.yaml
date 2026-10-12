@@ -1,0 +1,44 @@
+###############################################################################
+# GatewayClass + EnvoyProxy configuration for AKS
+#
+# Key difference from the KIND example: we use a LoadBalancer service type
+# instead of NodePort. Azure will provision an Azure Load Balancer with a
+# public IP, exposing port 9092 directly to the internet.
+###############################################################################
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: kafka-gateway-class
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: kafka-proxy-config
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: kafka-proxy-config
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+      envoyService:
+        # LoadBalancer for AKS — Azure provisions an Azure LB with public IP
+        type: LoadBalancer
+        annotations:
+          # Optional: pin to a specific Azure resource group for the public IP
+          # service.beta.kubernetes.io/azure-load-balancer-resource-group: "<RG>"
+        patch:
+          value:
+            spec:
+              ports:
+              - name: kafka-port
+                port: 9092
+                protocol: TCP
+                targetPort: 9092

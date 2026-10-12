@@ -1,0 +1,44 @@
+###############################################################################
+# Kafka Node Pools — KRaft mode (no ZooKeeper)
+#
+# Controller pool: 1 replica (IDs 0-9)
+# Broker pool:     3 replicas (IDs 10-100) — these are the data brokers
+#
+# Storage uses Azure managed disks via the "managed-csi" storage class
+# which is the AKS default for dynamically provisioned persistent volumes.
+###############################################################################
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  annotations:
+    strimzi.io/next-node-ids: '[0-9]'
+  labels:
+    strimzi.io/cluster: gateway-api-kafka
+  name: controller
+  namespace: strimzi
+spec:
+  replicas: 1
+  roles:
+  - controller
+  storage:
+    class: managed-csi
+    size: 10Gi
+    type: persistent-claim
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  annotations:
+    strimzi.io/next-node-ids: '[10-100]'
+  labels:
+    strimzi.io/cluster: gateway-api-kafka
+  name: broker
+  namespace: strimzi
+spec:
+  replicas: 3
+  roles:
+  - broker
+  storage:
+    class: managed-csi
+    size: 10Gi
+    type: persistent-claim

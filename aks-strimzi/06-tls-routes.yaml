@@ -1,0 +1,105 @@
+###############################################################################
+# TLSRoutes — SNI-based routing from Envoy Gateway to Kafka ClusterIP services
+#
+# How it works:
+#   1. External client connects to bootstrap.kafka.aks.mydomain.com:9092
+#   2. Envoy matches SNI → routes to bootstrap ClusterIP service
+#   3. Kafka returns broker metadata with advertisedHost per broker
+#   4. Client reconnects to broker-10.kafka.aks.mydomain.com:9092
+#   5. Envoy matches SNI → routes to that specific broker's ClusterIP service
+#
+# Service naming convention by Strimzi:
+#   Bootstrap: <cluster>-kafka-<listener>-bootstrap
+#   Broker:    <cluster>-broker-<listener>-<broker-id>
+###############################################################################
+
+# --- Bootstrap route ---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kafka-bootstrap
+  namespace: strimzi
+spec:
+  hostnames:
+  - bootstrap.kafka.aks.mydomain.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kafka-gateway
+    namespace: strimzi
+    sectionName: kafka-listener
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: gateway-api-kafka-kafka-gateway-bootstrap
+      port: 9092
+
+---
+# --- Broker 10 route ---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kafka-broker-10
+  namespace: strimzi
+spec:
+  hostnames:
+  - broker-10.kafka.aks.mydomain.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kafka-gateway
+    namespace: strimzi
+    sectionName: kafka-listener
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: gateway-api-kafka-broker-gateway-10
+      port: 9092
+
+---
+# --- Broker 11 route ---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kafka-broker-11
+  namespace: strimzi
+spec:
+  hostnames:
+  - broker-11.kafka.aks.mydomain.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kafka-gateway
+    namespace: strimzi
+    sectionName: kafka-listener
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: gateway-api-kafka-broker-gateway-11
+      port: 9092
+
+---
+# --- Broker 12 route ---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kafka-broker-12
+  namespace: strimzi
+spec:
+  hostnames:
+  - broker-12.kafka.aks.mydomain.com
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: kafka-gateway
+    namespace: strimzi
+    sectionName: kafka-listener
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: gateway-api-kafka-broker-gateway-12
+      port: 9092

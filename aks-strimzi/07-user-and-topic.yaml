@@ -1,0 +1,51 @@
+###############################################################################
+# KafkaUser (SCRAM-SHA-512) + KafkaTopic for testing
+###############################################################################
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: kafka-test-user
+  namespace: strimzi
+  labels:
+    strimzi.io/cluster: gateway-api-kafka
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+    - resource:
+        type: topic
+        name: "*"
+        patternType: literal
+      operations:
+        - 'All'
+      host: "*"
+    - resource:
+        type: group
+        name: "*"
+        patternType: literal
+      operations:
+        - 'All'
+      host: "*"
+    - resource:
+        type: cluster
+      operations:
+        - 'All'
+    - resource:
+        type: transactionalId
+        name: "*"
+        patternType: literal
+      operations:
+        - 'All'
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: test-topic
+  namespace: strimzi
+  labels:
+    strimzi.io/cluster: gateway-api-kafka
+spec:
+  partitions: 12
+  replicas: 3
