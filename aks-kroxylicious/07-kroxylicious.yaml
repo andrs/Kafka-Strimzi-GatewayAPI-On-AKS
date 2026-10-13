@@ -1,0 +1,85 @@
+###############################################################################
+# Kroxylicious Proxy — L7 Kafka protocol proxy for external access
+#
+# Resources:
+#   1. KafkaProxy           — proxy instance with resource limits
+#   2. KafkaProxyIngress    — LoadBalancer with SNI routing (Azure LB)
+#   3. KafkaService         — backend Strimzi Kafka cluster reference
+#   4. VirtualKafkaCluster  — ties proxy, ingress, service, and TLS together
+#
+# Architecture:
+#   Client → Azure LB:9092 → Kroxylicious (TLS term + metadata rewrite)
+#          → Strimzi Kafka brokers (internal TLS + SCRAM-SHA-512)
+#
+# Kroxylicious automatically rewrites Kafka Metadata, DescribeCluster, and
+# FindCoordinator responses to advertise virtual cluster addresses instead
+# of internal broker addresses.
+###############################################################################
+
+# --- 1. KafkaProxy instance ---
+apiVersion: kroxylicious.io/v1alpha1
+kind: KafkaProxy
+metadata:
+  name: kafka-proxy
+  namespace: strimzi
+spec:
+  infrastructure:
+    proxyContainer:
+      resources:
+        requests:
+          cpu: '250m'
+          memory: '512Mi'
+        limits:
+          cpu: '500m'
+          memory: '768Mi'
+
+---
+# --- 2. KafkaProxyIngress — Azure LoadBalancer with SNI routing ---
+apiVersion: kroxylicious.io/v1alpha1
+kind: KafkaProxyIngress
+metadata:
+  name: external-lb
+  namespace: strimzi
+spec:
+  proxyRef:
+    name: kafka-proxy
+  loadBalancer:
+    bootstrapAddress: "bootstrap.kafka.aks.mydomain.com"
+    advertisedBrokerAddressPattern: "broker-$(nodeId).kafka.aks.mydomain.com"
+
+---
+# --- 3. KafkaService — backend Strimzi Kafka cluster ---
+apiVersion: kroxylicious.io/v1alpha1
+kind: KafkaService
+metadata:
+  name: kafka-backend
+  namespace: strimzi
+spec:
+  strimziKafkaRef:
+    name: gateway-api-kafka
+    listenerName: tls
+    trustStrimziCaCertificate: true
+  nodeIdRanges:
+    - name: brokers
+      start: 10
+      end: 12
+
+---
+# --- 4. VirtualKafkaCluster — external-facing Kafka cluster ---
+apiVersion: kroxylicious.io/v1alpha1
+kind: VirtualKafkaCluster
+metadata:
+  name: gateway-api-kafka
+  namespace: strimzi
+spec:
+  proxyRef:
+    name: kafka-proxy
+  targetKafkaServiceRef:
+    name: kafka-backend
+  ingresses:
+    - ingressRef:
+        name: external-lb
+      tls:
+        certificateRef:
+          name: kafka-certificate
+          kind: Secret

@@ -1,0 +1,39 @@
+###############################################################################
+# Self-signed ClusterIssuer + Wildcard Certificate
+#
+# Used by Kroxylicious for client-to-proxy TLS termination.
+# The wildcard *.kafka.aks.mydomain.com covers:
+#   - bootstrap.kafka.aks.mydomain.com   (bootstrap address)
+#   - broker-10.kafka.aks.mydomain.com   (broker 10)
+#   - broker-11.kafka.aks.mydomain.com   (broker 11)
+#   - broker-12.kafka.aks.mydomain.com   (broker 12)
+###############################################################################
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: kafka-selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-certificate
+  namespace: strimzi
+spec:
+  secretName: kafka-certificate
+  subject:
+    organizations:
+    - kafka-aks-poc
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS8
+    size: 2048
+  usages:
+  - server auth
+  - client auth
+  dnsNames:
+  - '*.kafka.aks.mydomain.com'
+  issuerRef:
+    name: kafka-selfsigned-issuer
+    kind: ClusterIssuer

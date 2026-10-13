@@ -1,87 +1,82 @@
-# Apache Kafka on AKS with Gateway API 🚀
+# Apache Kafka on AKS with Kroxylicious L7 Proxy
 
 [![Azure](https://img.shields.io/badge/Azure-AKS-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/en-us/products/kubernetes-service)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.35+-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-4.1.0-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
 [![Strimzi](https://img.shields.io/badge/Strimzi-0.51.0-4695EB?logo=apache&logoColor=white)](https://strimzi.io/)
-[![Envoy Gateway](https://img.shields.io/badge/Envoy%20Gateway-1.2.1-AC6199?logo=envoyproxy&logoColor=white)](https://gateway.envoyproxy.io/)
+[![Kroxylicious](https://img.shields.io/badge/Kroxylicious-0.25.0-FF6B35)](https://kroxylicious.io/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Production-grade Apache Kafka deployment on Azure Kubernetes Service (AKS) using **Strimzi Operator** and **Kubernetes Gateway API** with TLS passthrough. Includes complete Python test suite with mock producers and consumers using SASL/SCRAM-SHA-512 authentication.
+Production-grade Apache Kafka deployment on Azure Kubernetes Service (AKS) using **Strimzi Operator** and **Kroxylicious** — an L7 Kafka protocol-aware proxy that terminates TLS, rewrites broker metadata automatically, and routes Kafka protocol requests via SNI. Includes a Python test suite with mock producers and consumers using SASL/SCRAM-SHA-512 authentication.
+
+> **Migrated from Envoy Gateway (L4 TLS passthrough) to Kroxylicious (L7 Kafka protocol proxy).** See [`migrated-kroxylicious.md`](migrated-kroxylicious.md) for the full migration comparison.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- 🏗️ **Cloud-Native Architecture** — Kafka deployed on AKS with KRaft mode (no ZooKeeper)
-- 🌐 **Gateway API Integration** — External access via Envoy Gateway with SNI-based TLS passthrough
-- 🔒 **Enterprise Security** — End-to-end TLS encryption + SCRAM-SHA-512 authentication
-- ⚡ **Cost-Optimized** — Single Azure Load Balancer serving all brokers via SNI routing
-- 🎯 **Production-Ready** — 3 broker replicas with persistent storage on Azure Managed Disks
-- 🧪 **Test Suite Included** — Python producer/consumer with realistic mock e-commerce events
-- 📦 **GitOps-Ready** — Declarative YAML manifests for all components
-- 🔄 **High Availability** — Multi-replica Envoy proxies, pod anti-affinity, PodDisruptionBudgets
+- **L7 Kafka Protocol Proxy** — Kroxylicious understands Kafka wire protocol, rewrites metadata responses automatically
+- **Native Strimzi Integration** — `strimziKafkaRef` auto-discovers bootstrap addresses and trusts Strimzi CA
+- **Cloud-Native Architecture** — Kafka on AKS with KRaft mode (no ZooKeeper)
+- **Enterprise Security** — TLS termination at proxy + re-encryption to brokers + SCRAM-SHA-512 authentication
+- **Cost-Optimized** — Single Azure Load Balancer serving all brokers via SNI routing
+- **Production-Ready** — 3 broker replicas, Retain storage policy, min.insync.replicas=2
+- **L7 Observability** — Per-broker connection metrics, Kafka API request/response counters, virtual cluster lifecycle
+- **Test Suite Included** — Python producer/consumer with realistic mock e-commerce events
 
 ---
 
-## 📊 Architecture Overview
+## Architecture Overview
 
 ```mermaid
 graph TB
-    Client[External Client<br/>Producer/Consumer]
-    ALB[Azure Load Balancer<br/>85.210.67.170:9092]
-    Envoy1[Envoy Proxy<br/>Replica 1]
-    Envoy2[Envoy Proxy<br/>Replica 2]
-    TLSRoute[TLSRoutes<br/>SNI-based routing]
-    Bootstrap[Bootstrap Service<br/>ClusterIP]
-    Broker10[Broker 10<br/>ClusterIP]
-    Broker11[Broker 11<br/>ClusterIP]
-    Broker12[Broker 12<br/>ClusterIP]
-    Pod10[Kafka Broker Pod 10<br/>10Gi PVC]
-    Pod11[Kafka Broker Pod 11<br/>10Gi PVC]
-    Pod12[Kafka Broker Pod 12<br/>10Gi PVC]
-    
-    Client -->|TLS ClientHello<br/>SNI: bootstrap.kafka.aks.mydomain.com| ALB
-    ALB -->|TCP Forward| Envoy1
-    ALB -->|TCP Forward| Envoy2
-    Envoy1 -.->|SNI Inspection| TLSRoute
-    Envoy2 -.->|SNI Inspection| TLSRoute
-    TLSRoute -->|SNI: bootstrap.*| Bootstrap
-    TLSRoute -->|SNI: broker-10.*| Broker10
-    TLSRoute -->|SNI: broker-11.*| Broker11
-    TLSRoute -->|SNI: broker-12.*| Broker12
-    Bootstrap --> Pod10
-    Bootstrap --> Pod11
-    Bootstrap --> Pod12
-    Broker10 --> Pod10
-    Broker11 --> Pod11
-    Broker12 --> Pod12
-    
+    Client[External Client<br/>Producer / Consumer]
+    ALB[Azure Load Balancer<br/>4.158.213.42:9083]
+    Kroxy[Kroxylicious Proxy<br/>L7 Kafka Protocol Aware]
+    VKC[VirtualKafkaCluster<br/>gateway-api-kafka]
+
+    subgraph "Strimzi Kafka Cluster (KRaft)"
+        Broker10[Broker 10<br/>10Gi PVC]
+        Broker11[Broker 11<br/>10Gi PVC]
+        Broker12[Broker 12<br/>10Gi PVC]
+        Controller[Controller 0<br/>10Gi PVC]
+    end
+
+    Client -->|"TLS + SCRAM-SHA-512<br/>SNI: bootstrap.kafka.aks.mydomain.com:9083"| ALB
+    ALB --> Kroxy
+    Kroxy -->|"1. Terminates client TLS<br/>2. Decodes Kafka protocol<br/>3. Rewrites metadata<br/>4. Re-encrypts to broker"| VKC
+    VKC -->|Internal TLS| Broker10
+    VKC -->|Internal TLS| Broker11
+    VKC -->|Internal TLS| Broker12
+    Controller -.->|KRaft consensus| Broker10
+    Controller -.->|KRaft consensus| Broker11
+    Controller -.->|KRaft consensus| Broker12
+
     style Client fill:#e1f5ff
     style ALB fill:#0078D4,color:#fff
-    style Envoy1 fill:#AC6199,color:#fff
-    style Envoy2 fill:#AC6199,color:#fff
-    style TLSRoute fill:#326CE5,color:#fff
-    style Pod10 fill:#231F20,color:#fff
-    style Pod11 fill:#231F20,color:#fff
-    style Pod12 fill:#231F20,color:#fff
+    style Kroxy fill:#FF6B35,color:#fff
+    style VKC fill:#326CE5,color:#fff
+    style Broker10 fill:#231F20,color:#fff
+    style Broker11 fill:#231F20,color:#fff
+    style Broker12 fill:#231F20,color:#fff
+    style Controller fill:#4695EB,color:#fff
 ```
 
-### 🔑 How It Works
+### How It Works
 
-1. **Client connects** to `bootstrap.kafka.aks.mydomain.com:9092` via Azure Load Balancer
-2. **Envoy Gateway** inspects SNI hostname in TLS ClientHello (without decrypting)
-3. **TLSRoute** matches SNI and routes to the correct Kafka broker's ClusterIP service
-4. **Kafka returns metadata** with advertised hostnames for each broker
-5. **Client reconnects** directly to specific broker (e.g., `broker-11.kafka.aks.mydomain.com`)
-6. **Same routing flow** ensures connection reaches the correct broker pod
+1. **Client connects** to `bootstrap.kafka.aks.mydomain.com:9083` via Azure Load Balancer
+2. **Kroxylicious terminates TLS** — reads SNI hostname from ClientHello, presents the wildcard cert
+3. **Kroxylicious decodes the Kafka protocol** — understands Metadata, Produce, Fetch, etc. at L7
+4. **Metadata rewriting** — intercepts Metadata/DescribeCluster/FindCoordinator responses and replaces internal broker addresses with external `broker-{nodeId}.kafka.aks.mydomain.com:9083`
+5. **SASL pass-through** — SCRAM-SHA-512 handshake flows end-to-end (client to broker) transparently
+6. **Proxy connects upstream** — establishes a separate TLS session to the Strimzi broker using the cluster CA
 
-> 💡 **Why Gateway API?** — One LoadBalancer serves all brokers instead of 4 separate LBs ($72/mo vs $18/mo), using SNI for intelligent routing without terminating TLS.
+> **Why Kroxylicious over Envoy Gateway?** — L7 Kafka awareness eliminates per-broker TLSRoutes and manual `advertisedHost` config. One `VirtualKafkaCluster` resource replaces 4 TLSRoutes + per-broker Kafka CR overrides. The proxy also exposes Kafka-specific metrics (API keys, request sizes, per-broker connections).
 
 ---
 
-## 🎯 Prerequisites
+## Prerequisites
 
 ### Required Tools
 
@@ -89,26 +84,22 @@ graph TB
 |------|---------|---------|
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) | Latest | Manage AKS cluster |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.35+ | Kubernetes CLI |
-| [Helm](https://helm.sh/docs/intro/install/) | 3.x | Package manager |
+| [Helm](https://helm.sh/docs/intro/install/) | 3.x | Package manager (Cert-Manager, Strimzi) |
 | [Python](https://www.python.org/downloads/) | 3.10+ | Test suite |
-| [jq](https://jqlang.github.io/jq/download/) | Latest | JSON processing (for credential extraction) |
+| [jq](https://jqlang.github.io/jq/download/) | Latest | JSON processing (credential extraction) |
 
 ### Azure Resources
 
-- **AKS Cluster** — Kubernetes 1.35+ with at least 2 nodes
-- **Node Size** — Minimum `Standard_D2s_v3` (2 vCPU, 8GB RAM)
-- **Network** — Azure CNI or kubenet with outbound connectivity
-- **Storage** — Managed disks for Kafka persistent volumes
-
-### Knowledge
-
-- Basic Kubernetes concepts (Pods, Services, StatefulSets)
-- Understanding of Kafka fundamentals (topics, partitions, brokers)
-- Familiarity with TLS/SSL and SNI routing
+| Resource | Requirement |
+|----------|------------|
+| **AKS Cluster** | Kubernetes 1.35+ with at least 2 nodes |
+| **Node Size** | Minimum `Standard_D2s_v3` (2 vCPU, 8GB RAM) |
+| **Network** | Azure CNI or kubenet with outbound connectivity |
+| **Storage** | Azure Managed Disks with `managed-csi-retain` StorageClass |
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Step 1: Clone the Repository
 
@@ -120,7 +111,6 @@ cd kafka-strimzi-gateway-api
 ### Step 2: Scale Your AKS Cluster (if needed)
 
 ```bash
-# Ensure cluster has at least 2 nodes
 az aks nodepool scale \
   --resource-group <YOUR_RG> \
   --cluster-name <YOUR_CLUSTER> \
@@ -128,78 +118,74 @@ az aks nodepool scale \
   --node-count 2
 ```
 
-### Step 3: Deploy Kafka Stack
+### Step 3: Deploy Kafka + Kroxylicious Stack
 
 ```bash
-cd aks-strimzi
+cd aks-kroxylicious
 
-# Full automated deployment (installs everything)
+# Full automated deployment
 bash deploy-all.sh
 ```
 
 **Or deploy step-by-step:**
 
 ```bash
-# 1. Install prerequisites (Envoy Gateway, Cert-Manager, Strimzi)
+# 1. Install prerequisites (Cert-Manager, Strimzi)
 bash 00-install-prerequisites.sh
 
-# 2. Apply Gateway API resources
-kubectl apply -f 01-gateway-class.yaml
-kubectl apply -f 02-gateway.yaml
+# 2. Install Kroxylicious Operator
+bash 01-install-kroxylicious.sh
 
-# 3. Create self-signed certificate
+# 3. Create StorageClass with Retain policy
+kubectl apply -f 02-storage-class.yaml
+
+# 4. Create self-signed certificate
 kubectl apply -f 03-certificate.yaml
 kubectl wait --for=condition=Ready certificate/kafka-certificate -n strimzi --timeout=120s
 
-# 4. Deploy Kafka NodePools and cluster
+# 5. Deploy Kafka NodePools and cluster
 kubectl apply -f 04-kafka-node-pools.yaml
 kubectl apply -f 05-kafka.yaml
 kubectl wait kafka/gateway-api-kafka --for=condition=Ready --timeout=600s -n strimzi
 
-# 5. Create TLS routes for SNI routing
-kubectl apply -f 06-tls-routes.yaml
-
-# 6. Create test user and topic
-kubectl apply -f 07-user-and-topic.yaml
+# 6. Create test user and topics
+kubectl apply -f 06-user-and-topics.yaml
 kubectl wait kafkauser/kafka-test-user --for=condition=Ready --timeout=120s -n strimzi
+
+# 7. Deploy Kroxylicious proxy
+kubectl apply -f 07-kroxylicious.yaml
 ```
 
 ### Step 4: Get the Load Balancer IP
 
 ```bash
-kubectl get svc -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=kafka-gateway \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
+kubectl get svc external-lb -n strimzi \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 ```
 
 ### Step 5: Configure DNS
 
-Add these entries to `/etc/hosts` (or your DNS server) using the LB IP from above:
+```bash
+# Replace 4.158.213.42 with your actual LB IP
+LB_IP="4.158.213.42"
+sudo tee -a /etc/hosts <<EOF
+${LB_IP}  bootstrap.kafka.aks.mydomain.com
+${LB_IP}  broker-10.kafka.aks.mydomain.com
+${LB_IP}  broker-11.kafka.aks.mydomain.com
+${LB_IP}  broker-12.kafka.aks.mydomain.com
+EOF
+```
+
+### Step 6: Extract Credentials
 
 ```bash
-# Replace 85.210.67.170 with your actual LB IP
-sudo tee -a /etc/hosts <<EOF
-85.210.67.170  bootstrap.kafka.aks.mydomain.com
-85.210.67.170  broker-10.kafka.aks.mydomain.com
-85.210.67.170  broker-11.kafka.aks.mydomain.com
-85.210.67.170  broker-12.kafka.aks.mydomain.com
-EOF
+cd ..
+bash setup-credentials-kroxy.sh
 ```
 
 ---
 
-## 🧪 Testing Kafka Connectivity
-
-### Extract Credentials
-
-```bash
-bash setup-credentials.sh
-```
-
-This creates `creds/` directory with:
-- `ca.crt` — CA certificate for TLS verification
-- `.env` — Environment variables for Python scripts
-- `client.properties` — Config file for Kafka CLI tools
+## Testing Kafka Connectivity
 
 ### Install Python Dependencies
 
@@ -210,151 +196,196 @@ pip install -r requirements.txt
 ### Run the Producer
 
 ```bash
-# Send messages at 3/sec, 15 total
-python3 producer.py --rate 3 --count 15
+python3 producer.py --rate 5 --count 20
 ```
 
 **Sample Output:**
 ```
-Producer starting — topic=test-topic  rate=3.0/sec  count=15
-Bootstrap: bootstrap.kafka.aks.mydomain.com:9092
+Producer starting — topic=test-topic  rate=5.0/sec  count=20
+Bootstrap: bootstrap.kafka.aks.mydomain.com:9083
 ------------------------------------------------------------
-  SEND  #1       order=be971c8c  customer=CUST-9088  amount=$69.00  status=pending
-  ACK   partition= 6  offset=1         [1 delivered]
-  SEND  #2       order=6f82df4b  customer=CUST-8011  amount=$399.95  status=completed
+  SEND  #1       order=a833b100  customer=CUST-1736  amount=$318.00  status=completed
+  ACK   partition=10  offset=1         [1 delivered]
   ...
-Done — sent=15  delivered=15  failed=0
+Done — sent=20  delivered=20  failed=0
 ```
 
 ### Run the Consumer
 
 ```bash
-# Read all messages from the beginning
 python3 consumer.py --from-beginning
 ```
 
 **Sample Output:**
 ```
 Consumer starting — topic=test-topic  group=test-consumer-group  offset=earliest
+Bootstrap: bootstrap.kafka.aks.mydomain.com:9083
 ------------------------------------------------------------------------------------------------------------------------
       #       Part:Offset    Time       Order        Customer     Product                Qty     Amount  Status
 ------------------------------------------------------------------------------------------------------------------------
-  [+] #1      P 2: 2         13:11:37  order=6f82df4b    customer=CUST-8011   Wireless Headphones     qty=5  $  399.95  completed
-  [!] #2      P 2: 3         13:11:39  order=7089e5f9    customer=CUST-2284   Coffee Maker            qty=2  $   99.98  refunded
-  [~] #3      P 6: 1         13:11:37  order=be971c8c    customer=CUST-9088   Yoga Mat                qty=2  $   69.00  pending
+  [+] #1      P 9: 0         18:07:46  order=668ac777    customer=CUST-6678   Coffee Maker            qty=2  $   99.98  completed
+  [!] #2      P 1: 2         18:07:47  order=b9505c7b    customer=CUST-8215   Running Shoes           qty=2  $  259.90  refunded
+  [~] #3      P 0: 1         18:07:46  order=cde543ef    customer=CUST-2484   Cast Iron Skillet       qty=2  $   89.98  pending
   ...
 ```
 
-> 📖 For detailed Python usage, see [`python.md`](python.md)
+> For detailed Python usage, see [`python.md`](python.md)
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 kafka-strimzi-gateway-api/
-├── aks-strimzi/                          # Kubernetes manifests for AKS
-│   ├── 00-install-prerequisites.sh       # Helm install script (Envoy, Cert-Manager, Strimzi)
-│   ├── 01-gateway-class.yaml             # GatewayClass + EnvoyProxy (LoadBalancer config)
-│   ├── 02-gateway.yaml                   # Gateway with TLS Passthrough
-│   ├── 03-certificate.yaml               # Self-signed ClusterIssuer + Certificate
-│   ├── 04-kafka-node-pools.yaml          # KRaft controller + broker node pools
-│   ├── 05-kafka.yaml                     # Kafka cluster CR (KRaft mode)
-│   ├── 06-tls-routes.yaml                # TLSRoutes for SNI-based routing
-│   ├── 07-user-and-topic.yaml            # KafkaUser (SCRAM-SHA-512) + KafkaTopic
-│   ├── 08-create-client-config.sh        # Legacy credential extractor (deprecated)
-│   ├── deploy-all.sh                     # Automated full deployment
-│   ├── aks-kafka.md                      # Quick reference guide
-│   ├── aks-kafka-installation.md         # Detailed installation log
-│   └── architecture.md                   # Deep-dive architecture documentation
+├── aks-kroxylicious/                        # Kubernetes manifests (Kroxylicious — current)
+│   ├── 00-install-prerequisites.sh          # Cert-Manager + Strimzi install
+│   ├── 01-install-kroxylicious.sh           # Kroxylicious Operator install
+│   ├── 02-storage-class.yaml               # managed-csi-retain StorageClass
+│   ├── 03-certificate.yaml                 # Self-signed ClusterIssuer + wildcard cert
+│   ├── 04-kafka-node-pools.yaml            # KRaft controller + broker node pools
+│   ├── 05-kafka.yaml                       # Kafka cluster CR (internal TLS listener)
+│   ├── 06-user-and-topics.yaml             # KafkaUser + KafkaTopics with configs
+│   ├── 07-kroxylicious.yaml                # KafkaProxy + Ingress + Service + VirtualCluster
+│   ├── cleanup-envoy.sh                    # Remove old Envoy Gateway resources
+│   └── deploy-all.sh                       # Automated full deployment
 │
-├── strimzi-gateway-api/                  # Reference examples from Strimzi blog
-│   └── (original KIND-based examples)
+├── aks-strimzi/                             # Legacy manifests (Envoy Gateway — deprecated)
+│   ├── 00-install-prerequisites.sh          # Envoy + Cert-Manager + Strimzi install
+│   ├── 01-gateway-class.yaml               # GatewayClass + EnvoyProxy config
+│   ├── 02-gateway.yaml                     # Gateway with TLS Passthrough
+│   ├── 03-certificate.yaml                 # Self-signed certificate
+│   ├── 04-kafka-node-pools.yaml            # Node pools
+│   ├── 05-kafka.yaml                       # Kafka CR (cluster-ip listener + per-broker advertisedHost)
+│   ├── 06-tls-routes.yaml                  # 4x TLSRoutes for SNI routing
+│   ├── 07-user-and-topic.yaml              # KafkaUser + KafkaTopic
+│   ├── deploy-all.sh                       # Legacy deployment script
+│   └── *.md                                # Architecture and installation docs
 │
-├── producer.py                           # Python mock producer (e-commerce events)
-├── consumer.py                           # Python formatted consumer
-├── setup-credentials.sh                  # Extract creds from K8s secrets
-├── requirements.txt                      # Python dependencies
-├── python.md                             # Python test suite documentation
-├── README.md                             # This file
-├── .gitignore                            # Protects secrets from being committed
-└── creds/                                # Generated credentials (git-ignored)
-    ├── ca.crt                            # CA certificate
-    ├── .env                              # Environment variables
-    └── client.properties                 # Kafka CLI config
+├── producer.py                              # Python mock producer (e-commerce events)
+├── consumer.py                              # Python formatted consumer
+├── setup-credentials-kroxy.sh               # Extract creds for Kroxylicious setup
+├── setup-credentials.sh                     # Extract creds (legacy Envoy setup)
+├── requirements.txt                         # Python dependencies
+├── python.md                                # Python test suite documentation
+├── migrated-kroxylicious.md                 # Migration comparison tables
+├── README.md                                # This file
+├── .gitignore                               # Protects secrets from being committed
+└── creds/                                   # Generated credentials (git-ignored)
+    ├── ca.crt                               # CA certificate (proxy TLS)
+    ├── .env                                 # Environment variables
+    └── client.properties                    # Kafka CLI config
 ```
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-### Key Settings
+### Component Versions
 
-| Component | Setting | Value | Notes |
-|-----------|---------|-------|-------|
-| **Kafka** | Version | 4.1.0 | KRaft mode (no ZooKeeper) |
-| | Brokers | 3 | IDs: 10, 11, 12 |
-| | Controllers | 1 | ID: 0 |
-| | Storage per pod | 10Gi | Azure Managed Disk (managed-csi) |
-| | Replication Factor | 3 | For test-topic |
-| | Partitions | 12 | For test-topic |
-| **Gateway** | Protocol | TLS | Passthrough mode (no termination) |
-| | Port | 9092 | Standard Kafka port |
-| | Service Type | LoadBalancer | Azure LB with public IP |
-| **Security** | Authentication | SCRAM-SHA-512 | SASL over TLS |
-| | Authorization | Simple ACLs | Kafka's built-in authorizer |
-| | TLS | Self-signed | Wildcard: `*.kafka.aks.mydomain.com` |
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| **Kubernetes** | 1.35.0 | AKS managed cluster |
+| **Strimzi Operator** | 0.51.0 | Kafka lifecycle management |
+| **Apache Kafka** | 4.1.0 | KRaft mode (no ZooKeeper) |
+| **Kroxylicious Operator** | 0.25.0 | L7 Kafka protocol proxy |
+| **Cert-Manager** | 1.16.2 | TLS certificate management |
 
-### Kafka Listener Configuration
+### Kafka Cluster
+
+| Setting | Value |
+|---------|-------|
+| **Brokers** | 3 (IDs: 10, 11, 12) |
+| **Controllers** | 1 (ID: 0) |
+| **Listener** | `tls` — internal, port 9093, SCRAM-SHA-512 |
+| **Storage per pod** | 10Gi Azure Managed Disk (`managed-csi-retain`) |
+| **default.replication.factor** | 3 |
+| **min.insync.replicas** | 2 |
+| **Authorization** | Simple ACLs |
+
+### Topic Configuration
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| **retention.ms** | 604800000 | 7-day retention |
+| **min.insync.replicas** | 2 | Tolerates 1 broker failure |
+| **segment.ms** | 86400000 | 24-hour segment rotation |
+| **segment.bytes** | 10485760 (test-topic) / 1073741824 (events, orders) | Segment size |
+
+### Kroxylicious Proxy
+
+| Setting | Value |
+|---------|-------|
+| **External port** | 9083 (assigned by operator) |
+| **Bootstrap** | `bootstrap.kafka.aks.mydomain.com:9083` |
+| **Broker pattern** | `broker-$(nodeId).kafka.aks.mydomain.com:9083` |
+| **Downstream TLS** | cert-manager wildcard `*.kafka.aks.mydomain.com` |
+| **Upstream TLS** | Strimzi cluster CA (auto-trusted) |
+| **Resources** | 250m/512Mi request, 500m/768Mi limit |
+
+### Kroxylicious CRDs
 
 ```yaml
-listeners:
-- name: gateway
-  port: 9092
-  type: cluster-ip
-  tls: true
-  authentication:
-    type: scram-sha-512
-  configuration:
-    createBootstrapService: true
-    brokerCertChainAndKey:
-      certificate: tls.crt
-      key: tls.key
-      secretName: kafka-certificate
-    brokers:
-    - broker: 10
-      advertisedHost: broker-10.kafka.aks.mydomain.com
-      advertisedPort: 9092
-    # ... (brokers 11, 12)
-```
-
-### TLS Route Example
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TLSRoute
+# KafkaProxy — proxy instance
+kind: KafkaProxy
 metadata:
-  name: kafka-broker-10
+  name: kafka-proxy
   namespace: strimzi
+
+# KafkaProxyIngress — Azure LoadBalancer with SNI routing
+kind: KafkaProxyIngress
+metadata:
+  name: external-lb
 spec:
-  hostnames:
-  - broker-10.kafka.aks.mydomain.com
-  parentRefs:
-  - kind: Gateway
-    name: kafka-gateway
-    sectionName: kafka-listener
-  rules:
-  - backendRefs:
-    - kind: Service
-      name: gateway-api-kafka-broker-gateway-10
-      port: 9092
+  loadBalancer:
+    bootstrapAddress: "bootstrap.kafka.aks.mydomain.com"
+    advertisedBrokerAddressPattern: "broker-$(nodeId).kafka.aks.mydomain.com"
+
+# KafkaService — native Strimzi integration
+kind: KafkaService
+metadata:
+  name: kafka-backend
+spec:
+  strimziKafkaRef:
+    name: gateway-api-kafka
+    listenerName: tls
+    trustStrimziCaCertificate: true
+  nodeIdRanges:
+    - name: brokers
+      start: 10
+      end: 12
+
+# VirtualKafkaCluster — external-facing cluster
+kind: VirtualKafkaCluster
+metadata:
+  name: gateway-api-kafka
+spec:
+  targetKafkaServiceRef:
+    name: kafka-backend
+  ingresses:
+    - ingressRef:
+        name: external-lb
+      tls:
+        certificateRef:
+          name: kafka-certificate
+          kind: Secret
 ```
+
+### StorageClass
+
+| Property | Value |
+|----------|-------|
+| **Name** | `managed-csi-retain` |
+| **Provisioner** | disk.csi.azure.com |
+| **Reclaim Policy** | Retain |
+| **Volume Binding** | WaitForFirstConsumer |
+| **Disk Type** | StandardSSD_LRS |
+| **Volume Expansion** | Enabled |
 
 ---
 
-## 🔐 Security Considerations
+## Security Considerations
 
-> ⚠️ **Production Checklist:**
+> **Production Checklist:**
 
 - [ ] Replace self-signed certificate with Let's Encrypt or internal CA
 - [ ] Implement network policies to restrict pod-to-pod traffic
@@ -363,17 +394,19 @@ spec:
 - [ ] Rotate SCRAM-SHA-512 credentials periodically
 - [ ] Restrict Kafka ACLs to specific topics/consumer groups per application
 - [ ] Enable audit logging for Kafka broker events
-- [ ] Configure backup strategy for Kafka persistent volumes
+- [ ] Configure backup strategy for Kafka persistent volumes (Retain policy helps)
 - [ ] Set resource limits and requests for all pods
 - [ ] Enable pod security standards (restricted profile)
+- [ ] Add Kroxylicious protocol filters (Record Encryption, Record Validation)
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [`aks-strimzi/architecture.md`](aks-strimzi/architecture.md) | Detailed architecture explanation with ASCII diagrams |
+| [`migrated-kroxylicious.md`](migrated-kroxylicious.md) | Migration comparison: Envoy Gateway vs Kroxylicious |
+| [`aks-strimzi/architecture.md`](aks-strimzi/architecture.md) | Detailed architecture explanation (legacy Envoy setup) |
 | [`aks-strimzi/aks-kafka-installation.md`](aks-strimzi/aks-kafka-installation.md) | Step-by-step installation log with troubleshooting |
 | [`aks-strimzi/aks-kafka.md`](aks-strimzi/aks-kafka.md) | Quick reference guide |
 | [`python.md`](python.md) | Python test suite usage and configuration |
@@ -381,12 +414,12 @@ spec:
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
 <details>
-<summary><strong>🔴 Connection Refused / Timeout</strong></summary>
+<summary><strong>Connection Refused / Timeout</strong></summary>
 
 **Symptoms:**
 ```
@@ -397,21 +430,25 @@ ERROR: Local: Broker transport failure
 1. Verify DNS entries in `/etc/hosts`
 2. Check Load Balancer IP:
    ```bash
-   kubectl get svc -n envoy-gateway-system
+   kubectl get svc external-lb -n strimzi
    ```
 3. Test connectivity:
    ```bash
-   nc -zv bootstrap.kafka.aks.mydomain.com 9092
+   nc -zv bootstrap.kafka.aks.mydomain.com 9083
    ```
-4. Check Envoy Gateway pods are running:
+4. Check Kroxylicious proxy pod is running:
    ```bash
-   kubectl get pods -n envoy-gateway-system
+   kubectl get pods -n strimzi -l app.kubernetes.io/managed-by=kroxylicious-operator
+   ```
+5. Check proxy logs:
+   ```bash
+   kubectl logs -n strimzi -l app.kubernetes.io/managed-by=kroxylicious-operator --tail=50
    ```
 
 </details>
 
 <details>
-<summary><strong>🔴 SASL Authentication Failed</strong></summary>
+<summary><strong>SASL Authentication Failed</strong></summary>
 
 **Symptoms:**
 ```
@@ -421,7 +458,7 @@ ERROR: SASL authentication failed
 **Fix:**
 1. Re-extract credentials:
    ```bash
-   bash setup-credentials.sh
+   bash setup-credentials-kroxy.sh
    ```
 2. Verify user exists and is ready:
    ```bash
@@ -435,7 +472,7 @@ ERROR: SASL authentication failed
 </details>
 
 <details>
-<summary><strong>🔴 SSL Certificate Error</strong></summary>
+<summary><strong>SSL Certificate Error</strong></summary>
 
 **Symptoms:**
 ```
@@ -453,13 +490,13 @@ ERROR: SSL handshake failed
    ```
 3. Re-extract if needed:
    ```bash
-   bash setup-credentials.sh
+   bash setup-credentials-kroxy.sh
    ```
 
 </details>
 
 <details>
-<summary><strong>🔴 Kafka Cluster Not Ready</strong></summary>
+<summary><strong>Kafka Cluster Not Ready</strong></summary>
 
 **Symptoms:**
 ```
@@ -476,13 +513,34 @@ kubectl wait kafka/gateway-api-kafka --for=condition=Ready
    ```bash
    kubectl get pods -n strimzi
    ```
-3. Check entity operator logs:
-   ```bash
-   kubectl logs -n strimzi -l strimzi.io/name=gateway-api-kafka-entity-operator -c topic-operator
-   ```
-4. Verify CRDs are up-to-date (common issue):
+3. Verify CRDs are up-to-date:
    ```bash
    kubectl apply -f https://github.com/strimzi/strimzi-kafka-operator/releases/download/0.51.0/strimzi-crds-0.51.0.yaml
+   ```
+
+</details>
+
+<details>
+<summary><strong>Kroxylicious VirtualKafkaCluster Not Accepted</strong></summary>
+
+**Symptoms:**
+```
+kubectl get virtualkafkacluster -n strimzi
+# Accepted: False
+```
+
+**Fix:**
+1. Check VirtualKafkaCluster status:
+   ```bash
+   kubectl describe virtualkafkacluster gateway-api-kafka -n strimzi
+   ```
+2. Check KafkaService resolved:
+   ```bash
+   kubectl describe kafkaservice kafka-backend -n strimzi
+   ```
+3. Verify the Kafka listener is available:
+   ```bash
+   kubectl get kafka gateway-api-kafka -n strimzi -o jsonpath='{.status.listeners}'
    ```
 
 </details>
@@ -493,17 +551,21 @@ kubectl wait kafka/gateway-api-kafka --for=condition=Ready
 # Check all Kafka resources
 kubectl get kafka,kafkanodepool,kafkatopic,kafkauser -n strimzi
 
-# Check Gateway API resources
-kubectl get gateway,gatewayclass,tlsroutes -n strimzi
+# Check Kroxylicious resources
+kubectl get kafkaproxy,kafkaproxyingress,kafkaservice,virtualkafkacluster -n strimzi
 
-# Check services and endpoints
-kubectl get svc,endpoints -n strimzi
+# Check services and LoadBalancer
+kubectl get svc -n strimzi
+
+# View Kroxylicious proxy logs
+kubectl logs -n strimzi -l app.kubernetes.io/managed-by=kroxylicious-operator --tail=100
+
+# Check proxy metrics
+POD=$(kubectl get pods -n strimzi -l app.kubernetes.io/managed-by=kroxylicious-operator -o jsonpath='{.items[0].metadata.name}')
+kubectl exec "$POD" -n strimzi -- curl -s http://localhost:9190/metrics | grep kroxylicious_client
 
 # View Kafka broker logs
 kubectl logs -n strimzi gateway-api-kafka-broker-10 --tail=100
-
-# Describe Gateway for status
-kubectl describe gateway kafka-gateway -n strimzi
 
 # Check certificate status
 kubectl describe certificate kafka-certificate -n strimzi
@@ -511,43 +573,41 @@ kubectl describe certificate kafka-certificate -n strimzi
 
 ---
 
-## 🧹 Cleanup
+## Cleanup
 
-### Remove Kafka Resources
+### Remove Kroxylicious + Kafka Resources
 
 ```bash
-kubectl delete -f aks-strimzi/07-user-and-topic.yaml
-kubectl delete -f aks-strimzi/06-tls-routes.yaml
-kubectl delete -f aks-strimzi/05-kafka.yaml
-kubectl delete -f aks-strimzi/04-kafka-node-pools.yaml
-kubectl delete -f aks-strimzi/03-certificate.yaml
-kubectl delete -f aks-strimzi/02-gateway.yaml
-kubectl delete -f aks-strimzi/01-gateway-class.yaml
+kubectl delete -f aks-kroxylicious/07-kroxylicious.yaml
+kubectl delete -f aks-kroxylicious/06-user-and-topics.yaml
+kubectl delete -f aks-kroxylicious/05-kafka.yaml
+kubectl delete -f aks-kroxylicious/04-kafka-node-pools.yaml
+kubectl delete -f aks-kroxylicious/03-certificate.yaml
+kubectl delete -f aks-kroxylicious/02-storage-class.yaml
 ```
 
-### Uninstall Helm Releases
+### Uninstall Operators
 
 ```bash
+# Kroxylicious Operator
+kubectl delete -f https://github.com/kroxylicious/kroxylicious/releases/download/v0.25.0/kroxylicious-operator-0.25.0-install.yaml
+
+# Strimzi
 helm uninstall strimzi-kafka-operator -n strimzi
+
+# Cert-Manager
 helm uninstall cert-manager -n cert-manager
-helm uninstall envoy-gateway -n envoy-gateway-system
 ```
 
 ### Delete Namespaces
 
 ```bash
-kubectl delete namespace strimzi cert-manager envoy-gateway-system
-```
-
-### Remove Gateway API CRDs
-
-```bash
-kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+kubectl delete namespace strimzi cert-manager kroxylicious-operator
 ```
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow these guidelines:
 
@@ -564,38 +624,22 @@ Contributions are welcome! Please follow these guidelines:
 Please include:
 - Kubernetes version (`kubectl version`)
 - Strimzi version (`helm list -n strimzi`)
+- Kroxylicious version (`kubectl get pods -n kroxylicious-operator -o yaml | grep image:`)
 - Error logs (`kubectl logs ...`)
 - Steps to reproduce
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **[Strimzi](https://strimzi.io/)** — Kafka on Kubernetes operator
-- **[Envoy Gateway](https://gateway.envoyproxy.io/)** — Kubernetes Gateway API implementation
-- **[Gateway API](https://gateway-api.sigs.k8s.io/)** — Next-generation Ingress/routing API
+- **[Kroxylicious](https://kroxylicious.io/)** — L7 Kafka protocol proxy
 - **[Azure AKS](https://azure.microsoft.com/en-us/products/kubernetes-service)** — Managed Kubernetes service
-- **Strimzi Blog Post**: ["Accessing Kafka with Gateway API"](https://strimzi.io/blog/2024/08/16/accessing-kafka-with-gateway-api/) — Original inspiration
-
----
-
-## 📧 Contact & Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/kafka-strimzi-gateway-api/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/kafka-strimzi-gateway-api/discussions)
-
----
-
-<div align="center">
-
-**⭐ If this project helped you, please give it a star! ⭐**
-
-Made with ❤️ by the Cloud Native Community
-
-</div>
+- **[Cert-Manager](https://cert-manager.io/)** — Kubernetes TLS certificate management
+- **Strimzi Blog Post**: ["Accessing Kafka with Gateway API"](https://strimzi.io/blog/2024/08/16/accessing-kafka-with-gateway-api/) — Original L4 inspiration, now evolved to L7 with Kroxylicious
