@@ -5,7 +5,7 @@
 ```bash
 # Using nodepool subcommand (explicit)
 az aks nodepool scale \
-  --resource-group <RESOURCE_GROUP> \
+  --resource-group <AZURE_RESOURCE_GROUP> \
   --cluster-name <CLUSTER_NAME> \
   --name nodepool1 \
   --node-count 2
